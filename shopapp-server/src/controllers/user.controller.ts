@@ -16,10 +16,9 @@ export class UserController {
 
   // Tạo user với role
   public async register(req: Request, res: Response) {
-    console.log(req.body);
     const { email, password, role, name, avatar, phoneNumber } = req.body;
     try {
-      const userRole = role === UserRole.ADMIN ? UserRole.ADMIN : UserRole.USER;
+      const userRole = role;
       const user = await this.userService.register(
         email,
         password,
@@ -29,14 +28,29 @@ export class UserController {
         phoneNumber
       );
       res.status(201).json({
-        message: "User created successfully",
+        message: "Please check your email to verify account",
         statusCode: 200,
         data: {
           user,
         },
       });
     } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      res.status(400).json({ statusCode: 400, message: error.message });
+    }
+  }
+
+  // Gửi lại OTP
+  public async resendOtp(req: Request, res: Response) {
+    try {
+      const { email } = req.body;
+      const otp = await this.userService.resendOtp(email);
+      res.status(200).json({
+        message: "OTP sent to your email.",
+        data: { otp },
+        statusCode: 200,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message, statusCode: 400 });
     }
   }
 
@@ -61,10 +75,10 @@ export class UserController {
   public async verifyOtp(req: Request, res: Response) {
     try {
       const { email, otp } = req.body;
-      const accessToken = await this.userService.verifyOtp(email, otp);
+      const user = await this.userService.verifyOtp(email, otp);
       res.status(200).json({
-        message: "OTP verified",
-        data: { accessToken },
+        message: "OTP verified successfully",
+        data: { user },
         statusCode: 200,
       });
     } catch (error: any) {
@@ -142,13 +156,13 @@ export class UserController {
       });
       const refreshToken = generateRefreshToken({
         id: user.id,
-        name: user.name,
-        role: UserRole.USER,
         method: METHOD_LOGIN.GOOGLE,
       });
-
+      user.refreshToken = refreshToken;
+      const userLogin = await this.userService.updateUser(user?.id, user);
+      const newUser = delete { ...userLogin }?.password;
       res.status(200).json({
-        data: { accessToken, refreshToken },
+        data: { accessToken, refreshToken, user: newUser },
         statusCode: 200,
         message: "Login successfully",
       });

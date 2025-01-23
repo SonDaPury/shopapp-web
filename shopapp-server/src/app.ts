@@ -7,6 +7,10 @@ import router from "./routes";
 import "reflect-metadata";
 import { Database } from "./configs/database.config";
 import passport from "passport";
+import { connectRedis } from "./configs/redis.config";
+import { log } from "./configs/logger.config";
+import { initQueues } from "./queues";
+import "./configs/google.config";
 
 export class App {
   public app: Application;
@@ -16,6 +20,7 @@ export class App {
 
     this.initializeMiddlewares();
     this.initializeDatabase();
+    this.initializeService();
     this.initializeRoutes();
   }
 
@@ -44,10 +49,16 @@ export class App {
     this.app.use("/api", router);
   }
 
+  // Initialize service
+  private async initializeService() {
+    await connectRedis();
+    await initQueues();
+  }
+
   // KInitialize server
   public listen() {
     this.app.listen(configs.env.port, () => {
-      console.log(
+      log.info(
         `Server is running on host: http://localhost:${configs.env.port}`
       );
     });

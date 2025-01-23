@@ -6,10 +6,18 @@ import { generateAccessToken, generateRefreshToken } from "../utils/jwt";
 import { configs } from "../configs/configs";
 import { METHOD_LOGIN, UserRole } from "../utils/constant";
 import { sendEmail } from "../configs/email.config";
+import { messages } from "../utils/messages";
+import { omit } from "lodash";
+import { DateTime } from "luxon";
+import { roundNumber } from "../utils/number";
+import { isEnumValue } from "../utils/helper-function";
+import { templateEmailSendCode } from "../utils/templates";
+import { addEmailJob } from "../queues/email.queue";
+import { addOtpCleanupJob } from "../queues/otp.queue";
 
 export class UserService {
   private userRepository = Database.getDbInstance().getRepository(User);
-  private otpExpiryMinutes = 3;
+  private otpExpiryMinutes = 1;
   private auth: any;
 
   constructor() {
@@ -54,23 +62,54 @@ export class UserService {
     return { code, expiresAt };
   }
 
+  // Resend OTP
+  public async resendOtp(email: string): Promise<string> {
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) throw new Error(messages.validation.users.userNotFound);
+
+    if (user.isVerified) {
+      throw new Error(messages.validation.users.userVerified);
+    }
+
+    const { code, expiresAt } = this.generateOtp();
+    user.otpCode = code;
+    user.otpExpiresAt = expiresAt;
+
+    const now = DateTime.now();
+    const expiresTime = DateTime.fromJSDate(expiresAt);
+    const diffInMinutes = expiresTime.diff(now, "minutes").minutes;
+
+    await addEmailJob(
+      email,
+      "Resend OTP Code",
+      templateEmailSendCode(code, roundNumber(diffInMinutes), now, user.name!)
+    );
+    await addOtpCleanupJob(user.id, diffInMinutes);
+    await this.userRepository.save(user);
+    return code;
+  }
+
   // Đăng ký
   public async register(
     email: string,
     password: string,
+    role: string,
     name?: string,
     avatar?: string,
-    phoneNumber?: string,
-    role: UserRole = UserRole.USER
-  ): Promise<string> {
+    phoneNumber?: string
+  ): Promise<User> {
     const existingUser = await this.userRepository.findOne({
       where: { email },
     });
-    if (existingUser) throw new Error("Email already registered.");
+
+    if (existingUser)
+      throw new Error(messages.validation.users.emailAlreadyExists);
+    if (!isEnumValue(UserRole, role)) {
+      throw new Error(messages.validation.users.roleInvalid);
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const { code, expiresAt } = this.generateOtp();
-
     const newUser = this.userRepository.create({
       email,
       password: hashedPassword,
@@ -79,17 +118,29 @@ export class UserService {
       name: name || "",
       avatar: avatar || "",
       phoneNumber: phoneNumber || "",
-      role,
+      role: role as UserRole,
     });
 
-    await this.userRepository.save(newUser);
+    const userRes = omit(newUser, ["password", "googleId", "refreshToken"]);
 
-    await sendEmail(
+    const now = DateTime.now();
+    const expiresTime = DateTime.fromJSDate(expiresAt);
+    const diffInMinutes = expiresTime.diff(now, "minutes").minutes;
+
+    await addEmailJob(
       email,
       "Verify Your Account",
-      `<p>Your verification code is: <strong>${code}</strong></p><p>This code will expire in 10 minutes.</p>`
+      templateEmailSendCode(
+        code,
+        roundNumber(diffInMinutes),
+        now,
+        newUser.name!
+      )
     );
-    return code;
+    await addOtpCleanupJob(newUser.id, diffInMinutes);
+    await this.userRepository.save(newUser);
+
+    return userRes;
   }
 
   public async getUsersByRole(role: UserRole): Promise<User[]> {
@@ -97,32 +148,38 @@ export class UserService {
   }
 
   // Xác minh OTP
-  public async verifyOtp(email: string, otp: string): Promise<string> {
+  public async verifyOtp(email: string, otp: string): Promise<User> {
     const user = await this.userRepository.findOne({ where: { email } });
-    if (!user) throw new Error("User not found.");
+    if (!user) throw new Error(messages.validation.users.userNotFound);
 
     if (!email || !otp) {
-      throw new Error("Email and OTP are required.");
+      throw new Error(messages.validation.users.verifyValidations);
     }
 
     if (user.otpCode !== otp) {
-      throw new Error("Invalid or expired OTP.");
+      throw new Error(messages.validation.users.OTPInvalid);
     }
     if (user.otpExpiresAt! < new Date()) {
-      throw new Error("OTP expired.");
+      throw new Error(messages.validation.users.OTPExpired);
     }
+    console.log("user.otpExpiresAt: ", user.otpExpiresAt);
+    console.log("date: ", new Date());
 
     user.isVerified = true;
     user.otpCode = null;
     user.otpExpiresAt = null;
+
+    const userRes = omit(user, [
+      "password",
+      "googleId",
+      "refreshToken",
+      "otpCode",
+      "otpExpiresAt",
+    ]);
+
     await this.userRepository.save(user);
 
-    return generateAccessToken({
-      id: user.id,
-      name: user?.name,
-      role: user?.role,
-      method: METHOD_LOGIN.NORMAL,
-    });
+    return userRes;
   }
 
   // Đăng nhập
@@ -131,10 +188,16 @@ export class UserService {
     password: string
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const user = await this.userRepository.findOne({ where: { email } });
-    if (!user) throw new Error("User not found.");
+    console.log(user);
+    if (!user) throw new Error(messages.validation.users.userNotFound);
+
+    if (!user.isVerified) {
+      throw new Error(messages.validation.users.userNotVerified);
+    }
 
     const isPasswordValid = await bcrypt.compare(password, user.password || "");
-    if (!isPasswordValid) throw new Error("Password is incorrect.");
+    if (!isPasswordValid)
+      throw new Error(messages.validation.users.passwordInvalid);
 
     const accessToken = generateAccessToken({
       id: user.id,
@@ -144,8 +207,6 @@ export class UserService {
     });
     const refreshToken = generateRefreshToken({
       id: user.id,
-      name: user?.name,
-      role: user?.role,
       method: METHOD_LOGIN.NORMAL,
     });
 
@@ -164,7 +225,7 @@ export class UserService {
     const user = await this.userRepository.findOne({
       where: { id: payload.id, refreshToken: token },
     });
-    if (!user) throw new Error("Invalid refresh token.");
+    if (!user) throw new Error(messages.validation.users.invalidRefreshToken);
 
     const accessToken = generateAccessToken({
       id: user.id,
@@ -174,8 +235,6 @@ export class UserService {
     });
     const newRefreshToken = generateRefreshToken({
       id: user.id,
-      name: user?.name,
-      role: user?.role,
       method: METHOD_LOGIN.NORMAL,
     });
 
@@ -188,18 +247,24 @@ export class UserService {
   // Quên mật khẩu
   public async forgotPassword(email: string): Promise<string> {
     const user = await this.userRepository.findOne({ where: { email } });
-    if (!user) throw new Error("User not found.");
+    if (!user) throw new Error(messages.validation.users.userNotFound);
 
     const { code, expiresAt } = this.generateOtp();
     user.otpCode = code;
     user.otpExpiresAt = expiresAt;
 
-    await this.userRepository.save(user);
-    await sendEmail(
+    const now = DateTime.now();
+    const expiresTime = DateTime.fromJSDate(expiresAt);
+    const diffInMinutes = expiresTime.diff(now, "minutes").minutes;
+
+    await addEmailJob(
       email,
       "Forgot Password Code",
-      `<p>Your OTP code is: <strong>${code}</strong></p><p>This code will expire in 10 minutes.</p>`
+      templateEmailSendCode(code, roundNumber(diffInMinutes), now, user.name!)
     );
+    await addOtpCleanupJob(user.id, diffInMinutes);
+    await this.userRepository.save(user);
+
     return code;
   }
 
@@ -210,13 +275,13 @@ export class UserService {
     newPassword: string
   ): Promise<void> {
     const user = await this.userRepository.findOne({ where: { email } });
-    if (!user) throw new Error("User not found.");
+    if (!user) throw new Error(messages.validation.users.userNotFound);
 
     if (user.otpCode !== otp) {
-      throw new Error("Invalid OTP.");
+      throw new Error(messages.validation.users.OTPInvalid);
     }
     if (user.otpExpiresAt! < new Date()) {
-      throw new Error("OTP expired.");
+      throw new Error(messages.validation.users.OTPExpired);
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -226,5 +291,14 @@ export class UserService {
     user.otpExpiresAt = null;
 
     await this.userRepository.save(user);
+  }
+
+  // Update user
+  public async updateUser(id: string, data: any): Promise<User> {
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) throw new Error(messages.validation.users.userNotFound);
+
+    const updatedUser = this.userRepository.merge(user, data);
+    return await this.userRepository.save(updatedUser);
   }
 }

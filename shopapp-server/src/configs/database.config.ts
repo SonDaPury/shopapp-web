@@ -1,5 +1,6 @@
 import { DataSource } from "typeorm";
 import { configs } from "./configs";
+import logger, { log } from "./logger.config";
 
 export const AppDataSource = new DataSource({
   type: "mysql",
@@ -30,12 +31,13 @@ export class Database {
       const dataSource = this.getDbInstance();
       if (!dataSource.isInitialized) {
         await dataSource.initialize();
-        console.log("Database connected successfully!");
+        log.info("Database connected successfully!");
       } else {
-        console.log("Database already connected!");
+        log.info("Database already connected!");
       }
     } catch (error) {
-      console.error("Error connecting to the database:", error);
+      log.error("Error connecting to the database:", error);
+      logger.error("Error connecting to the database:", error);
       process.exit(1);
     }
   }

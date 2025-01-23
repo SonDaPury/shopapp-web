@@ -36,7 +36,7 @@ export class User {
   @Column({ type: "varchar", nullable: true })
   otpCode?: string | null;
 
-  @Column({ type: "varchar", nullable: true })
+  @Column({ type: "datetime", nullable: true })
   otpExpiresAt?: Date | null;
 
   @Column({ default: false })

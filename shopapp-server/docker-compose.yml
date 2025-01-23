@@ -1,0 +1,23 @@
+services:
+  # Redis
+  redis: 
+    image: redis:latest
+    container_name: redis_server
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: pury
+      RABBITMQ_DEFAULT_PASS: "123"
+
+volumes:
+  redis_data:

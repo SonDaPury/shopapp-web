@@ -5,6 +5,7 @@ export const transporter = nodemailer.createTransport({
   host: configs.env.email.host,
   port: configs.env.email.port,
   secure: configs.env.email.secure,
+  service: "gmail",
   auth: {
     user: configs.env.email.user,
     pass: configs.env.email.password,
@@ -27,6 +28,6 @@ export const sendEmail = async (to: string, subject: string, html: string) => {
   } catch (error) {
     console.error("Error sending email:", error);
     configs.logger.error("Error sending email:", error);
-    throw new Error("Error sending email");
+    throw new Error("Error sending email: " + error);
   }
 };
