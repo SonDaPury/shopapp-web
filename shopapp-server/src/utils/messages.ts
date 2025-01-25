@@ -21,5 +21,8 @@ export const messages = {
       userVerified: "User is verified",
       roleInvalid: "Role must be either 'user' or 'admin'",
     },
+    category: {
+      nameRequired: "Category name is required",
+    },
   },
 };
